@@ -1,0 +1,8 @@
+node_modules/
+*.log
+.DS_Store
+.opencode/
+artifacts/
+dist/
+extension/
+release/
