@@ -9,7 +9,10 @@ OpenCode Chrome Annotation lets you select a UI element on a live website, add a
 
 to your active OpenCode session through your local OpenCode setup so you can implement the change faster.
 
-<video src="./screenrecording.mp4" controls muted playsinline width="100%"></video>
+
+https://github.com/user-attachments/assets/bdee8a15-6720-4e57-b28d-ee6440722b71
+
+
 
 ## Install
 
