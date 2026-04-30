@@ -131,6 +131,23 @@ function isExplicitFalse(value: any): boolean {
   return value === false || value?.data === false;
 }
 
+function unwrapClientResult(result: any, action: string): any {
+  if (!result || typeof result !== "object") return result;
+
+  if ("error" in result && result.error) {
+    const err = result.error;
+    const message =
+      (typeof err?.message === "string" && err.message) ||
+      (typeof err?.error === "string" && err.error) ||
+      (typeof err === "string" && err) ||
+      `OpenCode ${action} failed`;
+    throw new Error(message);
+  }
+
+  if ("data" in result) return result.data;
+  return result;
+}
+
 function setLastAnnotationStatus(status: Record<string, any>): void {
   lastAnnotationStatus = { ...status, time: new Date().toISOString() };
 }
@@ -294,7 +311,7 @@ async function queueAnnotationPrompt(sessionId: string, annotation: any): Promis
     commentLength: typeof annotation?.comment === "string" ? annotation.comment.length : 0,
   });
 
-  const parts: Array<Record<string, any>> = [{ type: "text", text: buildAnnotationPrompt(annotation) }];
+  let promptText = buildAnnotationPrompt(annotation);
   const screenshot = annotation?.screenshot;
   if (screenshot?.dataUrl) {
     mkdirSync(ANNOTATION_DIR, { recursive: true });
@@ -303,33 +320,49 @@ async function queueAnnotationPrompt(sessionId: string, annotation: any): Promis
     const stem = sanitizeFileStem(annotation?.page?.title || annotation?.element?.tag || "annotation");
     const filePath = join(ANNOTATION_DIR, `${Date.now()}-${stem}.${ext}`);
     writeFileSync(filePath, bytes);
-    parts.push({
-      type: "file",
-      url: filePath,
-      filename: basename(filePath),
-      mime,
-    });
+    promptText += `\n\nScreenshot: ${filePath}`;
   }
 
-  const text = parts
-    .map((part) => {
-      if (part.type === "text") return part.text;
-      if (part.type === "file") return `\nScreenshot: ${part.url}`;
-      return "";
-    })
-    .filter(Boolean)
-    .join("\n");
+  const promptBody = { parts: [{ type: "text", text: promptText }] };
+
+  if (typeof pluginClient?.session?.promptAsync === "function") {
+    const response = await pluginClient.session.promptAsync({
+      path: { id: sessionId },
+      query: { directory: pluginDirectory },
+      body: promptBody,
+    });
+    const data = unwrapClientResult(response, "session prompt");
+    if (isExplicitFalse(data)) throw new Error("OpenCode rejected session prompt submission");
+    setLastAnnotationStatus({ ok: true, sessionId, transport: "session.promptAsync", response: data ?? null });
+    return;
+  }
+
+  if (typeof pluginClient?.session?.prompt === "function") {
+    const response = await pluginClient.session.prompt({
+      path: { id: sessionId },
+      query: { directory: pluginDirectory },
+      body: promptBody,
+    });
+    const data = unwrapClientResult(response, "session prompt");
+    if (isExplicitFalse(data)) throw new Error("OpenCode rejected session prompt submission");
+    setLastAnnotationStatus({ ok: true, sessionId, transport: "session.prompt", response: data ?? null });
+    return;
+  }
+
+  const text = promptText;
 
   const appended = await pluginClient.tui.appendPrompt({
     query: { directory: pluginDirectory },
     body: { text },
   });
-  if (isExplicitFalse(appended)) throw new Error("OpenCode rejected appending the annotation prompt");
+  const appendedData = unwrapClientResult(appended, "tui append prompt");
+  if (isExplicitFalse(appendedData)) throw new Error("OpenCode rejected appending the annotation prompt");
 
   const submitted = await pluginClient.tui.submitPrompt({ query: { directory: pluginDirectory } });
-  if (isExplicitFalse(submitted)) throw new Error("OpenCode rejected submitting the annotation prompt");
+  const submittedData = unwrapClientResult(submitted, "tui submit prompt");
+  if (isExplicitFalse(submittedData)) throw new Error("OpenCode rejected submitting the annotation prompt");
 
-  setLastAnnotationStatus({ ok: true, sessionId, response: appended ?? null });
+  setLastAnnotationStatus({ ok: true, sessionId, transport: "tui", response: appendedData ?? null });
 }
 
 function buildStatus(): Record<string, any> {
