@@ -1,33 +1,33 @@
-# OpenCode Chrome Annotation
+# <img src="https://raw.githubusercontent.com/jodusnodus/opencode-chrome-annotation/main/icon.svg" width="60" align="center" /> OpenCode Chrome Annotation
 
-Annotate any page in Chrome and send that context directly into [OpenCode](https://opencode.ai).
+[![version](https://img.shields.io/npm/v/opencode-chrome-annotation?style=flat&colorA=000000&colorB=000000)](https://npmjs.com/package/opencode-chrome-annotation)
+[![license](https://img.shields.io/npm/l/opencode-chrome-annotation?style=flat&colorA=000000&colorB=000000)](https://github.com/jodusnodus/opencode-chrome-annotation/blob/main/LICENSE)
 
-OpenCode Chrome Annotation lets you select a UI element on a live website, add a short instruction, and send:
-- your comment,
-- selected element metadata,
-- and a screenshot
-
-to your active OpenCode session through your local OpenCode setup so you can implement the change faster.
-
+Annotate any page in Chrome and send the screenshot, selected element metadata, and your instruction directly into [OpenCode](https://opencode.ai).
 
 https://github.com/user-attachments/assets/bdee8a15-6720-4e57-b28d-ee6440722b71
 
 
-
 ## Install
 
-1. Install the plugin package in your OpenCode environment.
-2. Add it to your OpenCode config:
+Install the OpenCode plugin package in the same environment where you run OpenCode:
+
+```bash
+npm install opencode-chrome-annotation
+```
+
+Add the plugin to your OpenCode config:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["opencode-chrome-annotation"]
+  "plugin": ["opencode-chrome-annotation@latest"]
 }
 ```
 
-3. Install the Chrome extension from the Chrome Web Store:
-   - https://chromewebstore.google.com/detail/abeihanpaeioklkhioiigklonbomhjfd
+Install the Chrome extension from the Chrome Web Store:
+
+https://chromewebstore.google.com/detail/abeihanpaeioklkhioiigklonbomhjfd
 
 ## How It Works
 
@@ -37,21 +37,44 @@ https://github.com/user-attachments/assets/bdee8a15-6720-4e57-b28d-ee6440722b71
 4. Click **Annotate** in the in-page pill.
 5. Select an element, write your instruction, and submit.
 
-## In-Page UX
+The plugin runs a local HTTP server bound to `127.0.0.1` on ports `39240-39260`. The extension discovers the active OpenCode plugin instance over localhost and sends annotations directly to it.
 
-- The pill is draggable and snaps to top or bottom.
-- The session picker expands from the same pill.
-- Keyboard shortcuts in picker:
-  - `Escape` close
-  - `ArrowUp` / `ArrowDown` navigate
-  - `Enter` select
+## What Gets Sent
+
+- Your written instruction.
+- The current page URL and title.
+- Selected element metadata such as selector, tag, text, role, aria label, and bounds.
+- A screenshot saved locally by the plugin and referenced in the OpenCode prompt.
+
+
+## Troubleshooting
+
+If the extension cannot find OpenCode, start OpenCode in your project and run the `chrome_status` tool from OpenCode. It reports the plugin version, runtime directory, listening port, startup status, and any bind failures.
 
 ## Development
+
+### Plugin
+
+The OpenCode plugin source lives in `src/plugin.ts`. The published package entrypoint is generated at `dist/plugin.js`.
+
+Install dependencies:
+
+```bash
+bun install
+```
+
+Build the plugin:
+
+```bash
+bun run build
+```
+
+### Extension
 
 The Chrome extension source lives in `extension-src/`. The loadable extension output is generated into `extension/` and is not tracked by git.
 
 ```bash
-npm run build:extension
+bun run build:extension
 ```
 
 Then load the generated `extension/` directory from `chrome://extensions`.
@@ -59,10 +82,5 @@ Then load the generated `extension/` directory from `chrome://extensions`.
 To create the Chrome Web Store upload zip:
 
 ```bash
-npm run build:zip
+bun run build:zip
 ```
-
-## Uninstall
-
-- Remove the extension from `chrome://extensions`.
-- Remove the plugin entry from your OpenCode config.

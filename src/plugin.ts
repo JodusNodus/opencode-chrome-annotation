@@ -1,8 +1,8 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { tmpdir, userInfo } from "os";
+import { tmpdir } from "os";
 import { basename, dirname, join } from "path";
-import { createServer } from "http";
+import { createServer, type Server } from "http";
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -14,6 +14,7 @@ const LOG_PATH = join(BASE_DIR, "plugin.log");
 const ANNOTATION_DIR = join(BASE_DIR, "annotations");
 const PORT_START = 39240;
 const PORT_END = 39260;
+const LISTEN_HOST = "127.0.0.1";
 const APP_ID = "opencode-chrome-annotation";
 const INSTANCE_SESSION_PREFIX = "plugin:";
 const CLAIM_TTL_MS = 5 * 60 * 1000;
@@ -24,6 +25,10 @@ let pluginClient: any = null;
 let pluginDirectory = process.cwd();
 let pluginSessionLabel = buildSessionLabel(pluginDirectory);
 let listeningPort: number | null = null;
+let httpServer: Server | null = null;
+let serverStartupStatus: "not-started" | "starting" | "listening" | "failed" = "not-started";
+let serverStartupError: string | null = null;
+const bindFailures: Array<{ port: number; code?: string; message: string }> = [];
 let lastAnnotationStatus: Record<string, any> | null = null;
 let activeOpencodeSessionId: string | null = null;
 let lastExtensionVersion: string | null = null;
@@ -40,16 +45,24 @@ function fallbackSession(): { id: string; title: string; directory: string; stat
 }
 
 function getRuntimeBaseDir(): string {
-  try {
-    const username = userInfo().username || "user";
-    const safe = username.replace(/[^a-zA-Z0-9._-]/g, "_");
-    return join(tmpdir(), "opencode-chrome-annotation", safe);
-  } catch {
-    return join(tmpdir(), "opencode-chrome-annotation");
-  }
-}
+  const uid = typeof process.getuid === "function" ? process.getuid() : null;
+  const candidates = [
+    process.env.XDG_RUNTIME_DIR ? join(process.env.XDG_RUNTIME_DIR, "opencode-chrome-annotation") : null,
+    join(tmpdir(), `opencode-chrome-annotation-${uid ?? "user"}`),
+  ];
 
-mkdirSync(BASE_DIR, { recursive: true });
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      mkdirSync(candidate, { recursive: true, mode: 0o700 });
+      return candidate;
+    } catch {
+      // Try the next location.
+    }
+  }
+
+  return join(tmpdir(), `opencode-chrome-annotation-${uid ?? "user"}`);
+}
 
 function getPackageVersion(): string {
   if (cachedVersion) return cachedVersion;
@@ -369,6 +382,13 @@ function buildStatus(): Record<string, any> {
   return {
     app: APP_ID,
     version: getPackageVersion(),
+    runtime: {
+      platform: process.platform,
+      node: process.version,
+      tmpdir: tmpdir(),
+      xdgRuntimeDir: Boolean(process.env.XDG_RUNTIME_DIR),
+      uid: typeof process.getuid === "function" ? process.getuid() : null,
+    },
     instanceId: processSessionId,
     sessionId: processSessionId,
     opencodeSessionId: activeOpencodeSessionId,
@@ -377,6 +397,13 @@ function buildStatus(): Record<string, any> {
     runtimeBaseDir: BASE_DIR,
     annotationDir: ANNOTATION_DIR,
     logPath: LOG_PATH,
+    server: {
+      status: serverStartupStatus,
+      host: LISTEN_HOST,
+      port: listeningPort,
+      startupError: serverStartupError,
+      bindFailures,
+    },
     port: listeningPort,
     lastExtensionVersion,
     claimTtlMs: CLAIM_TTL_MS,
@@ -387,6 +414,9 @@ function buildStatus(): Record<string, any> {
 
 async function startServer(): Promise<void> {
   if (listeningPort) return;
+  serverStartupStatus = "starting";
+  serverStartupError = null;
+  bindFailures.length = 0;
 
   for (let port = PORT_START; port <= PORT_END; port++) {
     const server = createServer(async (req, res) => {
@@ -397,7 +427,7 @@ async function startServer(): Promise<void> {
       }
 
       try {
-        const url = new URL(req.url || "/", `http://127.0.0.1:${port}`);
+        const url = new URL(req.url || "/", `http://${LISTEN_HOST}:${port}`);
         if (req.method === "GET" && url.pathname === "/status") {
           json(res, 200, buildStatus(), origin);
           return;
@@ -467,17 +497,30 @@ async function startServer(): Promise<void> {
     });
 
     const started = await new Promise<boolean>((resolve) => {
-      server.once("error", () => resolve(false));
-      server.listen(port, "127.0.0.1", () => resolve(true));
+      server.once("error", (error: NodeJS.ErrnoException) => {
+        const failure = {
+          port,
+          code: error.code,
+          message: error.message,
+        };
+        bindFailures.push(failure);
+        logDebug(`http bind failed port=${port} code=${failure.code || ""} error=${failure.message}`);
+        resolve(false);
+      });
+      server.listen(port, LISTEN_HOST, () => resolve(true));
     });
 
     if (!started) continue;
+    httpServer = server;
     listeningPort = port;
+    serverStartupStatus = "listening";
     logDebug(`http server listening port=${port} session=${processSessionId} label=${JSON.stringify(pluginSessionLabel)}`);
     return;
   }
 
-  throw new Error(`Could not bind OpenCode annotation server on ports ${PORT_START}-${PORT_END}`);
+  serverStartupStatus = "failed";
+  serverStartupError = `Could not bind OpenCode annotation server on ${LISTEN_HOST} ports ${PORT_START}-${PORT_END}`;
+  throw new Error(serverStartupError);
 }
 
 const plugin: Plugin = async (ctx) => {
@@ -486,7 +529,9 @@ const plugin: Plugin = async (ctx) => {
   pluginSessionLabel = buildSessionLabel(ctx.worktree || pluginDirectory);
 
   startServer().catch((error) => {
-    logDebug(`server startup failed error=${error instanceof Error ? error.message : String(error)}`);
+    serverStartupStatus = "failed";
+    serverStartupError = error instanceof Error ? error.message : String(error);
+    logDebug(`server startup failed error=${serverStartupError}`);
   });
 
   return {

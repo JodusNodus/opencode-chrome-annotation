@@ -1,6 +1,6 @@
 {
   "name": "opencode-chrome-annotation",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Annotate pages in Chrome and send context into your local OpenCode setup.",
   "type": "module",
   "main": "./dist/plugin.js",
