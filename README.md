@@ -10,12 +10,6 @@ https://github.com/user-attachments/assets/bdee8a15-6720-4e57-b28d-ee6440722b71
 
 ## Install
 
-Install the OpenCode plugin package in the same environment where you run OpenCode:
-
-```bash
-npm install opencode-chrome-annotation
-```
-
 Add the plugin to your OpenCode config:
 
 ```json
