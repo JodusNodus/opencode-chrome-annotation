@@ -37,9 +37,8 @@ https://chromewebstore.google.com/detail/abeihanpaeioklkhioiigklonbomhjfd
 4. Click **Annotate** in the in-page pill.
 5. Select an element, write your instruction, and submit.
 
-The plugin runs a local HTTP server bound to `127.0.0.1` on ports `39240-39260`. The extension discovers the active OpenCode plugin instance over localhost and sends annotations directly to it.
 
-## What Gets Sent
+### What Gets Sent
 
 - Your written instruction.
 - The current page URL and title.
@@ -47,9 +46,13 @@ The plugin runs a local HTTP server bound to `127.0.0.1` on ports `39240-39260`.
 - A screenshot saved locally by the plugin and referenced in the OpenCode prompt.
 
 
-## Troubleshooting
+### Troubleshooting
+The plugin runs a local HTTP server bound to `127.0.0.1` on ports `39240-39260`. The extension discovers the active OpenCode plugin instance over localhost.
 
-If the extension cannot find OpenCode, start OpenCode in your project and run the `chrome_status` tool from OpenCode. It reports the plugin version, runtime directory, listening port, startup status, and any bind failures.
+- The extension can't start a new session, you need to be in an active OpenCode session to connect.
+- If the extension can't find any session, ask your agent to run `chrome_status` that should give a detailed report.
+- Make sure OpenCode and your Chromium browser exist in the same localhost network (not in seperate containers).
+
 
 ## Development
 
