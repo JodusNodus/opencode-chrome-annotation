@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
+import { request as httpRequest } from "node:http";
 import { createServer } from "node:net";
 import plugin from "./plugin";
 
@@ -46,6 +47,7 @@ function createContext(port: number, portEnd = port) {
   const events = new EventQueue();
   const prompts: any[] = [];
   const tools: any[] = [];
+  const toolState = { disposed: false };
   const sessionInfos = new Map<string, any>();
   const context = {
     app: { name: "opencode", version: "test", channel: "test" },
@@ -67,11 +69,11 @@ function createContext(port: number, portEnd = port) {
     tool: {
       transform: async (transform: (draft: { add(tool: any): void }) => void) => {
         transform({ add: (tool) => tools.push(tool) });
-        return { dispose: async () => undefined };
+        return { dispose: async () => { toolState.disposed = true; } };
       },
     },
   };
-  return { context, events, prompts, sessionInfos, tools };
+  return { context, events, prompts, sessionInfos, tools, toolState };
 }
 
 async function getSessions(port: number) {
@@ -85,6 +87,35 @@ async function post(port: number, path: string, body: unknown) {
     body: JSON.stringify(body),
   });
   return { response, body: await response.json() };
+}
+
+async function postChunks(port: number, path: string, chunks: Buffer[]) {
+  return await new Promise<{ status: number | undefined; body: any }>((resolve, reject) => {
+    const request = httpRequest({
+      host: "127.0.0.1",
+      port,
+      path,
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "chrome-extension://test-extension" },
+    }, (response) => {
+      const body: Buffer[] = [];
+      response.on("data", (chunk) => body.push(chunk));
+      response.on("end", () => resolve({
+        status: response.statusCode,
+        body: JSON.parse(Buffer.concat(body).toString("utf8")),
+      }));
+    });
+    request.on("error", reject);
+    const write = (index: number) => {
+      if (index === chunks.length) {
+        request.end();
+        return;
+      }
+      request.write(chunks[index]);
+      setTimeout(() => write(index + 1), 5);
+    };
+    write(0);
+  });
 }
 
 async function expectSessions(port: number, expected: unknown) {
@@ -103,6 +134,7 @@ async function expectSessions(port: number, expected: unknown) {
 }
 
 afterEach(async () => {
+  setSystemTime();
   while (cleanups.length) await cleanups.pop()?.();
 });
 
@@ -153,8 +185,11 @@ describe("OpenCode V2 plugin", () => {
       sessions: [{ id: "ses_test", title: "Renamed", directory: "/workspace", status: "open" }],
     });
 
+    await post(port, "/claim", { tabId: 5, sessionId: "ses_test" });
     events.push({ type: "session.deleted", created: 30, data: { sessionID: "ses_test" } });
     await expectSessions(port, { sessions: [] });
+    const status = await fetch(`http://127.0.0.1:${port}/status`).then((response) => response.json());
+    expect(status.claims).toEqual([]);
   });
 
   test("hydrates an existing session when the TUI selects it", async () => {
@@ -230,6 +265,63 @@ describe("OpenCode V2 plugin", () => {
     const status = await fetch(`http://127.0.0.1:${port}/status`).then((response) => response.json());
     expect(status.claims).toEqual([]);
     expect(status.lastAnnotation).toEqual(expect.objectContaining({ ok: true, sessionId: "ses_target" }));
+    expect(status.lastAnnotation.response).toBeUndefined();
+    expect(JSON.stringify(status)).not.toContain(screenshot.slice("data:image/png;base64,".length));
+  });
+
+  test("preserves Unicode split across request chunks", async () => {
+    const port = await freePort();
+    const { context, events, prompts } = createContext(port);
+    const cleanup = await plugin.setup(context as never);
+    if (cleanup) cleanups.push(cleanup);
+    events.push({
+      type: "session.created",
+      created: 10,
+      data: { sessionID: "ses_unicode", slug: "unicode", location: { directory: "/workspace" } },
+    });
+    await expectSessions(port, {
+      sessions: [{ id: "ses_unicode", title: "unicode", directory: "/workspace", status: "open" }],
+    });
+    await post(port, "/claim", { tabId: 11, sessionId: "ses_unicode" });
+    const payload = Buffer.from(JSON.stringify({
+      tabId: 11,
+      sessionId: "ses_unicode",
+      annotation: { comment: "Move the café 🚀 heading", screenshot: { dataUrl: "data:image/png;base64,AA==" } },
+    }));
+    const emoji = Buffer.from("🚀");
+    const split = payload.indexOf(emoji) + 2;
+
+    const result = await postChunks(port, "/annotation", [payload.subarray(0, split), payload.subarray(split)]);
+
+    expect(result).toEqual({ status: 200, body: { ok: true, sessionId: "ses_unicode" } });
+    expect(prompts[0].text).toContain("Move the café 🚀 heading");
+  });
+
+  test("rejects an expired tab claim", async () => {
+    setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const port = await freePort();
+    const { context, events } = createContext(port);
+    const cleanup = await plugin.setup(context as never);
+    if (cleanup) cleanups.push(cleanup);
+    events.push({
+      type: "session.created",
+      created: 10,
+      data: { sessionID: "ses_expiry", slug: "expiry", location: { directory: "/workspace" } },
+    });
+    await expectSessions(port, {
+      sessions: [{ id: "ses_expiry", title: "expiry", directory: "/workspace", status: "open" }],
+    });
+    await post(port, "/claim", { tabId: 12, sessionId: "ses_expiry" });
+    setSystemTime(new Date("2026-01-01T00:05:01.000Z"));
+
+    const result = await post(port, "/annotation", {
+      tabId: 12,
+      sessionId: "ses_expiry",
+      annotation: { comment: "Too late", screenshot: { dataUrl: "data:image/png;base64,AA==" } },
+    });
+
+    expect(result.response.status).toBe(400);
+    expect(result.body).toEqual({ ok: false, error: "tab is not claimed by this session" });
   });
 
   test("falls back from an occupied port and releases its listener during cleanup", async () => {
@@ -237,7 +329,7 @@ describe("OpenCode V2 plugin", () => {
     const blocker = createServer();
     await new Promise<void>((resolve) => blocker.listen(firstPort, "127.0.0.1", resolve));
     const secondPort = firstPort + 1;
-    const { context } = createContext(firstPort, secondPort);
+    const { context, toolState } = createContext(firstPort, secondPort);
 
     const cleanup = await plugin.setup(context as never);
     expect(cleanup).toBeFunction();
@@ -248,10 +340,23 @@ describe("OpenCode V2 plugin", () => {
     ]);
 
     await cleanup?.();
+    expect(toolState.disposed).toBeTrue();
     await new Promise<void>((resolve, reject) => blocker.close((error) => error ? reject(error) : resolve()));
     const rebound = createServer();
     await new Promise<void>((resolve) => rebound.listen(secondPort, "127.0.0.1", resolve));
     await new Promise<void>((resolve, reject) => rebound.close((error) => error ? reject(error) : resolve()));
+  });
+
+  test("disposes the tool registration when no bridge port is available", async () => {
+    const port = await freePort();
+    const blocker = createServer();
+    await new Promise<void>((resolve) => blocker.listen(port, "127.0.0.1", resolve));
+    const { context, toolState } = createContext(port);
+
+    await expect(plugin.setup(context as never)).rejects.toThrow("Could not bind");
+    expect(toolState.disposed).toBeTrue();
+
+    await new Promise<void>((resolve, reject) => blocker.close((error) => error ? reject(error) : resolve()));
   });
 
   test("rejects requests from ordinary web origins", async () => {

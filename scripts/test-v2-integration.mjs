@@ -152,8 +152,10 @@ try {
   assert(annotationResponse.status === 200 && annotationResponse.body.ok === true, "Annotation was not admitted")
 
   const status = await fetch(`${bridgeUrl}/status`).then((response) => response.json())
-  const admittedFile = status.lastAnnotation?.response?.payload?.files?.[0]
+  const inbox = await api(baseUrl, `/api/session/${sessionId}/inbox`)
+  const admittedFile = inbox.data?.find((item) => item.id === status.lastAnnotation?.messageId)?.payload?.files?.[0]
   assert(status.lastAnnotation?.ok === true, "Bridge did not record successful admission")
+  assert(status.lastAnnotation?.response === undefined, "Bridge status retained the admitted prompt payload")
   assert(admittedFile?.mime === "image/png", "Admitted prompt did not materialize a PNG attachment")
   assert(admittedFile?.source?.type === "inline", "Admitted PNG was not an inline attachment")
 

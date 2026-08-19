@@ -161,16 +161,23 @@ const plugin = Plugin.define({
     };
 
     const readBody = (req: any): Promise<any> => new Promise((resolve, reject) => {
-      let body = "";
+      const chunks: Buffer[] = [];
+      let bytes = 0;
+      let failed = false;
       req.on("data", (chunk: Buffer) => {
-        body += chunk.toString("utf8");
-        if (Buffer.byteLength(body) > MAX_REQUEST_BYTES) {
-          req.pause();
+        if (failed) return;
+        bytes += chunk.length;
+        if (bytes > MAX_REQUEST_BYTES) {
+          failed = true;
           reject(new Error("Request body too large"));
+          return;
         }
+        chunks.push(chunk);
       });
       req.on("end", () => {
+        if (failed) return;
         try {
+          const body = Buffer.concat(chunks).toString("utf8");
           resolve(body ? JSON.parse(body) : {});
         } catch {
           reject(new Error("Invalid JSON body"));
@@ -231,6 +238,7 @@ const plugin = Plugin.define({
           if (!Number.isFinite(body?.tabId)) throw new Error("tabId is required");
           if (typeof body?.sessionId !== "string" || !body.sessionId) throw new Error("sessionId is required");
           if (!body?.annotation || typeof body.annotation !== "object") throw new Error("annotation is required");
+          pruneClaims();
           const claim = claims.get(Number(body.tabId));
           if (!claim || claim.sessionId !== body.sessionId) throw new Error("tab is not claimed by this session");
 
@@ -262,7 +270,8 @@ const plugin = Plugin.define({
               ok: true,
               sessionId: body.sessionId,
               transport: "session.prompt",
-              response: result,
+              messageId: result.id,
+              messageType: result.type,
               time: new Date().toISOString(),
             };
           } catch (error) {
@@ -296,7 +305,7 @@ const plugin = Plugin.define({
       }
     };
 
-    await ctx.tool.transform((tools) => {
+    const toolRegistration = await ctx.tool.transform((tools) => {
       tools.add({
         name: "chrome_status",
         description: "Report OpenCode Chrome Annotation server, session, claim, and delivery status.",
@@ -325,6 +334,7 @@ const plugin = Plugin.define({
     if (!server) {
       startupStatus = "failed";
       startupError = `Could not bind ${APP_ID} on ${LISTEN_HOST} ports ${portStart}-${portEnd}`;
+      await toolRegistration.dispose();
       throw new Error(startupError);
     }
 
@@ -378,6 +388,9 @@ const plugin = Plugin.define({
           }
           if (event?.type === "session.deleted" && typeof sessionId === "string") {
             sessions.delete(sessionId);
+            for (const [tabId, claim] of claims) {
+              if (claim.sessionId === sessionId) claims.delete(tabId);
+            }
             if (selectedSessionId === sessionId) selectedSessionId = null;
           }
         }
@@ -388,12 +401,21 @@ const plugin = Plugin.define({
 
     return async () => {
       stopping = true;
-      await eventIterator.return?.();
-      await eventTask;
       const activeServer = server;
       server = null;
-      if (activeServer?.listening) {
-        await new Promise<void>((resolve, reject) => activeServer.close((error) => error ? reject(error) : resolve()));
+      const results = await Promise.allSettled([
+        (async () => {
+          await eventIterator.return?.();
+          await eventTask;
+        })(),
+        activeServer?.listening
+          ? new Promise<void>((resolve, reject) => activeServer.close((error) => error ? reject(error) : resolve()))
+          : Promise.resolve(),
+        toolRegistration.dispose(),
+      ]);
+      const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+      if (failed) {
+        throw failed.reason;
       }
     };
   },
