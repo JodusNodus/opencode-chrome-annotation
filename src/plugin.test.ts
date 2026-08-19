@@ -16,44 +16,61 @@ async function freePort(): Promise<number> {
 
 class EventQueue implements AsyncIterator<any>, AsyncIterable<any> {
   private events: any[] = [];
-  private waiters: Array<(result: IteratorResult<any>) => void> = [];
+  private waiters: Array<{
+    resolve: (result: IteratorResult<any>) => void;
+    reject: (error: Error) => void;
+  }> = [];
   private closed = false;
+  private failure: Error | null = null;
 
   [Symbol.asyncIterator]() {
     return this;
   }
 
   next(): Promise<IteratorResult<any>> {
+    if (this.failure) return Promise.reject(this.failure);
     const event = this.events.shift();
     if (event) return Promise.resolve({ done: false, value: event });
     if (this.closed) return Promise.resolve({ done: true, value: undefined });
-    return new Promise((resolve) => this.waiters.push(resolve));
+    return new Promise((resolve, reject) => this.waiters.push({ resolve, reject }));
   }
 
   push(event: any) {
     const waiter = this.waiters.shift();
-    if (waiter) waiter({ done: false, value: event });
+    if (waiter) waiter.resolve({ done: false, value: event });
     else this.events.push(event);
+  }
+
+  fail(error: Error) {
+    this.failure = error;
+    for (const waiter of this.waiters.splice(0)) waiter.reject(error);
   }
 
   async return(): Promise<IteratorResult<any>> {
     this.closed = true;
-    for (const waiter of this.waiters.splice(0)) waiter({ done: true, value: undefined });
+    for (const waiter of this.waiters.splice(0)) waiter.resolve({ done: true, value: undefined });
     return { done: true, value: undefined };
   }
 }
 
 function createContext(port: number, portEnd = port) {
   const events = new EventQueue();
+  const reconnectedEvents = new EventQueue();
+  const eventState = { subscriptions: 0 };
   const prompts: any[] = [];
   const tools: any[] = [];
   const toolState = { disposed: false };
   const sessionInfos = new Map<string, any>();
   const context = {
     app: { name: "opencode", version: "test", channel: "test" },
-    options: { portStart: port, portEnd },
+    options: {
+      portStart: port,
+      portEnd,
+      eventRetryMs: 1,
+      allowedExtensionOrigins: ["chrome-extension://test-extension"],
+    },
     event: {
-      subscribe: () => events,
+      subscribe: () => eventState.subscriptions++ === 0 ? events : reconnectedEvents,
     },
     session: {
       get: async ({ sessionID }: { sessionID: string }) => {
@@ -73,7 +90,7 @@ function createContext(port: number, portEnd = port) {
       },
     },
   };
-  return { context, events, prompts, sessionInfos, tools, toolState };
+  return { context, events, eventState, prompts, reconnectedEvents, sessionInfos, tools, toolState };
 }
 
 async function getSessions(port: number) {
@@ -190,6 +207,27 @@ describe("OpenCode V2 plugin", () => {
     await expectSessions(port, { sessions: [] });
     const status = await fetch(`http://127.0.0.1:${port}/status`).then((response) => response.json());
     expect(status.claims).toEqual([]);
+  });
+
+  test("reconnects after a transient event stream failure", async () => {
+    const port = await freePort();
+    const { context, events, eventState, reconnectedEvents } = createContext(port);
+    const cleanup = await plugin.setup(context as never);
+    if (cleanup) cleanups.push(cleanup);
+
+    events.fail(new Error("temporary stream failure"));
+    const deadline = Date.now() + 1_000;
+    while (eventState.subscriptions < 2 && Date.now() < deadline) await Bun.sleep(5);
+    expect(eventState.subscriptions).toBeGreaterThanOrEqual(2);
+    reconnectedEvents.push({
+      type: "session.created",
+      created: 10,
+      data: { sessionID: "ses_reconnected", slug: "reconnected", location: { directory: "/workspace" } },
+    });
+
+    await expectSessions(port, {
+      sessions: [{ id: "ses_reconnected", title: "reconnected", directory: "/workspace", status: "open" }],
+    });
   });
 
   test("hydrates an existing session when the TUI selects it", async () => {
@@ -371,6 +409,38 @@ describe("OpenCode V2 plugin", () => {
 
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({ ok: false, error: "Origin not allowed" });
+
+    const foreignExtension = await fetch(`http://127.0.0.1:${port}/sessions`, {
+      headers: { origin: "chrome-extension://foreign-extension" },
+    });
+    expect(foreignExtension.status).toBe(403);
+  });
+
+  test("rejects attachment URIs that are not supported inline images", async () => {
+    const port = await freePort();
+    const { context, events, prompts } = createContext(port);
+    const cleanup = await plugin.setup(context as never);
+    if (cleanup) cleanups.push(cleanup);
+    events.push({
+      type: "session.created",
+      created: 10,
+      data: { sessionID: "ses_uri", slug: "uri", location: { directory: "/workspace" } },
+    });
+    await expectSessions(port, {
+      sessions: [{ id: "ses_uri", title: "uri", directory: "/workspace", status: "open" }],
+    });
+    await post(port, "/claim", { tabId: 13, sessionId: "ses_uri" });
+
+    for (const dataUrl of ["file:///etc/passwd", "https://example.com/image.png", "data:text/plain;base64,SGVsbG8="]) {
+      const result = await post(port, "/annotation", {
+        tabId: 13,
+        sessionId: "ses_uri",
+        annotation: { comment: "Bad attachment", screenshot: { dataUrl } },
+      });
+      expect(result.response.status).toBe(400);
+      expect(result.body).toEqual({ ok: false, error: "screenshot must be a supported base64 image data URL" });
+    }
+    expect(prompts).toEqual([]);
   });
 
   test("reports prompt admission failures without claiming success", async () => {

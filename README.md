@@ -45,6 +45,19 @@ The plugin runs a local HTTP server bound to `127.0.0.1` on ports `39240-39260`.
 
 - The extension can't start a new session, you need to be in an active OpenCode session to connect.
 - OpenCode V2 does not expose persisted session listing to plugins. The picker shows real sessions observed after plugin activation, including a session selected in the TUI; restart OpenCode after installing the plugin so the current session is observed.
+- The published Chrome Web Store extension is allowed by default. For an unpacked development extension, copy its ID from `chrome://extensions` and add its origin through plugin options:
+
+```json
+{
+  "plugins": [{
+    "package": "opencode-chrome-annotation@latest",
+    "options": {
+      "allowedExtensionOrigins": ["chrome-extension://your-unpacked-extension-id"]
+    }
+  }]
+}
+```
+
 - If the extension can't find any session, ask your agent to run `chrome_status` that should give a detailed report.
 - Make sure OpenCode and your Chromium browser exist in the same localhost network (not in separate containers).
 

@@ -9,6 +9,7 @@ const APP_ID = "opencode-chrome-annotation";
 const LISTEN_HOST = "127.0.0.1";
 const DEFAULT_PORT_START = 39240;
 const DEFAULT_PORT_END = 39260;
+const WEB_STORE_EXTENSION_ORIGIN = "chrome-extension://abeihanpaeioklkhioiigklonbomhjfd";
 const CLAIM_TTL_MS = 5 * 60 * 1000;
 const MAX_REQUEST_BYTES = 10 * 1024 * 1024;
 
@@ -95,6 +96,15 @@ const plugin = Plugin.define({
     const portStart = Number.isInteger(options.portStart) ? Number(options.portStart) : DEFAULT_PORT_START;
     const portEnd = Number.isInteger(options.portEnd) ? Number(options.portEnd) : DEFAULT_PORT_END;
     const resume = options.resume === false ? false : undefined;
+    const eventRetryMs = Number.isInteger(options.eventRetryMs) && Number(options.eventRetryMs) >= 0
+      ? Number(options.eventRetryMs)
+      : 1_000;
+    const allowedExtensionOrigins = new Set([
+      WEB_STORE_EXTENSION_ORIGIN,
+      ...(Array.isArray(options.allowedExtensionOrigins)
+        ? options.allowedExtensionOrigins.filter((origin): origin is string => typeof origin === "string")
+        : []),
+    ]);
     const baseDir = runtimeBaseDir();
     const logPath = join(baseDir, "plugin.log");
     const sessions = new Map<string, SessionRecord>();
@@ -152,7 +162,7 @@ const plugin = Plugin.define({
     };
 
     const sendJson = (res: any, statusCode: number, body: unknown, origin?: string) => {
-      if (origin?.startsWith("chrome-extension://")) res.setHeader("Access-Control-Allow-Origin", origin);
+      if (origin && allowedExtensionOrigins.has(origin)) res.setHeader("Access-Control-Allow-Origin", origin);
       res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
       res.setHeader("Access-Control-Allow-Headers", "content-type");
       res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -201,7 +211,7 @@ const plugin = Plugin.define({
 
     const handleRequest = async (req: any, res: any, port: number) => {
       const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
-      if (origin && !origin.startsWith("chrome-extension://")) {
+      if (origin && !allowedExtensionOrigins.has(origin)) {
         sendJson(res, 403, { ok: false, error: "Origin not allowed" });
         return;
       }
@@ -244,6 +254,10 @@ const plugin = Plugin.define({
 
           rememberClaim(Number(body.tabId), body.sessionId, body.extensionVersion);
           const screenshot = body.annotation.screenshot;
+          if (typeof screenshot?.dataUrl === "string" && screenshot.dataUrl &&
+            !/^data:image\/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(screenshot.dataUrl)) {
+            throw new Error("screenshot must be a supported base64 image data URL");
+          }
           const files = typeof screenshot?.dataUrl === "string" && screenshot.dataUrl
             ? [{
                 uri: screenshot.dataUrl,
@@ -338,8 +352,9 @@ const plugin = Plugin.define({
       throw new Error(startupError);
     }
 
-    const eventIterator = ctx.event.subscribe()[Symbol.asyncIterator]();
     let stopping = false;
+    let stopEvents: () => void = () => undefined;
+    const stopped = new Promise<void>((resolve) => { stopEvents = resolve; });
     const hydrateSession = async (sessionId: string, updatedAt: number) => {
       try {
         const session = await ctx.session.get({ sessionID: sessionId });
@@ -354,60 +369,81 @@ const plugin = Plugin.define({
         log(`session hydrate failed id=${sessionId} error=${error instanceof Error ? error.message : String(error)}`);
       }
     };
-    const eventTask = (async () => {
-      try {
-        while (!stopping) {
-          const next = await eventIterator.next();
-          if (next.done) break;
-          const event = next.value as any;
-          const sessionId = event?.data?.sessionID;
-          if (event?.type === "tui.session.select" && typeof sessionId === "string") {
-            selectedSessionId = sessionId;
-            await hydrateSession(sessionId, Number(event.created) || Date.now());
-            continue;
-          }
-          if (event?.type === "session.created" && typeof sessionId === "string") {
-            sessions.set(sessionId, {
-              id: sessionId,
-              title: event.data.title || event.data.slug || `Session ${sessionId.slice(0, 8)}`,
-              directory: event.data.location?.directory,
-              status: "open",
-              updatedAt: Number(event.created) || Date.now(),
-            });
-            continue;
-          }
-          if (event?.type === "session.renamed" && typeof sessionId === "string") {
-            const session = sessions.get(sessionId);
-            if (session) sessions.set(sessionId, { ...session, title: event.data.title, updatedAt: Number(event.created) || Date.now() });
-            continue;
-          }
-          if (event?.type === "session.moved" && typeof sessionId === "string") {
-            const session = sessions.get(sessionId);
-            if (session) sessions.set(sessionId, { ...session, directory: event.data.location?.directory, updatedAt: Number(event.created) || Date.now() });
-            continue;
-          }
-          if (event?.type === "session.deleted" && typeof sessionId === "string") {
-            sessions.delete(sessionId);
-            for (const [tabId, claim] of claims) {
-              if (claim.sessionId === sessionId) claims.delete(tabId);
-            }
-            if (selectedSessionId === sessionId) selectedSessionId = null;
-          }
+    const handleEvent = async (event: any) => {
+      const sessionId = event?.data?.sessionID;
+      if (event?.type === "tui.session.select" && typeof sessionId === "string") {
+        selectedSessionId = sessionId;
+        await hydrateSession(sessionId, Number(event.created) || Date.now());
+        return;
+      }
+      if (event?.type === "session.created" && typeof sessionId === "string") {
+        sessions.set(sessionId, {
+          id: sessionId,
+          title: event.data.title || event.data.slug || `Session ${sessionId.slice(0, 8)}`,
+          directory: event.data.location?.directory,
+          status: "open",
+          updatedAt: Number(event.created) || Date.now(),
+        });
+        return;
+      }
+      if (event?.type === "session.renamed" && typeof sessionId === "string") {
+        const session = sessions.get(sessionId);
+        if (session) sessions.set(sessionId, { ...session, title: event.data.title, updatedAt: Number(event.created) || Date.now() });
+        return;
+      }
+      if (event?.type === "session.moved" && typeof sessionId === "string") {
+        const session = sessions.get(sessionId);
+        if (session) sessions.set(sessionId, { ...session, directory: event.data.location?.directory, updatedAt: Number(event.created) || Date.now() });
+        return;
+      }
+      if (event?.type === "session.deleted" && typeof sessionId === "string") {
+        sessions.delete(sessionId);
+        for (const [tabId, claim] of claims) {
+          if (claim.sessionId === sessionId) claims.delete(tabId);
         }
-      } catch (error) {
-        if (!stopping) log(`event stream stopped error=${error instanceof Error ? error.message : String(error)}`);
+        if (selectedSessionId === sessionId) selectedSessionId = null;
+      }
+    };
+    const closeEventIterator = async (iterator: AsyncIterator<any> | null) => {
+      if (!iterator?.return) return;
+      await Promise.race([
+        iterator.return(),
+        new Promise<void>((resolve) => setTimeout(resolve, 1_000)),
+      ]);
+    };
+    const eventTask = (async () => {
+      while (!stopping) {
+        const iterator = ctx.event.subscribe()[Symbol.asyncIterator]();
+        try {
+          while (!stopping) {
+            const next = await Promise.race([
+              iterator.next(),
+              stopped.then((): IteratorResult<any> => ({ done: true, value: undefined })),
+            ]);
+            if (next.done) break;
+            await handleEvent(next.value);
+          }
+        } catch (error) {
+          if (!stopping) log(`event stream stopped error=${error instanceof Error ? error.message : String(error)}`);
+        } finally {
+          await closeEventIterator(iterator);
+        }
+        if (!stopping) {
+          await Promise.race([
+            new Promise<void>((resolve) => setTimeout(resolve, eventRetryMs)),
+            stopped,
+          ]);
+        }
       }
     })();
 
     return async () => {
       stopping = true;
+      stopEvents();
       const activeServer = server;
       server = null;
       const results = await Promise.allSettled([
-        (async () => {
-          await eventIterator.return?.();
-          await eventTask;
-        })(),
+        eventTask,
         activeServer?.listening
           ? new Promise<void>((resolve, reject) => activeServer.close((error) => error ? reject(error) : resolve()))
           : Promise.resolve(),

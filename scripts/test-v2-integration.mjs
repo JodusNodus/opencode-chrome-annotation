@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process"
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { basename, join, resolve } from "node:path"
@@ -86,7 +86,12 @@ try {
   writeFileSync(join(project, "opencode.jsonc"), JSON.stringify({
     plugins: [{
       package: pluginPath,
-      options: { portStart: bridgePort, portEnd: bridgePort, resume: false },
+      options: {
+        portStart: bridgePort,
+        portEnd: bridgePort,
+        resume: false,
+        allowedExtensionOrigins: ["chrome-extension://integration-test"],
+      },
     }],
   }, null, 2))
 
@@ -112,12 +117,21 @@ try {
   )
   assert(plugins.data.some((entry) => entry.id === "opencode.chrome-annotation"), "Plugin ID was not registered")
 
+  const bridgeUrl = `http://127.0.0.1:${bridgePort}`
+  const firstInstance = await fetch(`${bridgeUrl}/status`).then((response) => response.json())
+  const nextMtime = new Date(Date.now() + 2_000)
+  utimesSync(pluginPath, nextMtime, nextMtime)
+  await eventually(
+    () => fetch(`${bridgeUrl}/status`).then((response) => response.json()),
+    (status) => status.instanceId !== firstInstance.instanceId,
+    "hot-reloaded plugin listener",
+  )
+
   const created = await api(baseUrl, "/api/session", {
     method: "POST",
     body: JSON.stringify({ title: "Chrome annotation integration", location: { directory: project } }),
   })
   const sessionId = created.data.id
-  const bridgeUrl = `http://127.0.0.1:${bridgePort}`
   await eventually(
     () => fetch(`${bridgeUrl}/sessions`).then((response) => response.json()),
     (result) => result.sessions?.some((session) => session.id === sessionId),
