@@ -7,6 +7,7 @@ const sourceDir = join(root, "extension-src")
 const outputDir = join(root, "extension")
 const iconSvg = join(root, "icon.svg")
 
+mkdirSync(outputDir, { recursive: true })
 for (const entry of readdirSync(outputDir, { withFileTypes: true })) {
   if (entry.isFile() && entry.name.endsWith(".js")) {
     unlinkSync(join(outputDir, entry.name))
