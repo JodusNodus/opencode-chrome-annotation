@@ -1,7 +1,7 @@
 import { logExtension, warnExtension } from "./logger.js"
 import { getActiveTab } from "./tabs.js"
 import { postJson, requestSessionState } from "./server-api.js"
-import { injectConnectionOverlay, removeConnectionOverlay, showAnnotationError } from "./ui-overlays.js"
+import { injectConnectionOverlay, removeConnectionOverlay, showAnnotationError, showAnnotationQueued } from "./ui-overlays.js"
 import { showSessionPicker } from "./session-picker.js"
 import { runAnnotationPicker } from "./annotation-picker.js"
 import { createConnectionMonitor } from "./connection-monitor.js"
@@ -231,6 +231,7 @@ async function startAnnotationMode(tabOverride?: chrome.tabs.Tab): Promise<{ can
     tabId: tab.id,
     sessionId: annotationResponse?.sessionId,
   })
+  if (annotationResponse?.queued === true) await showAnnotationQueued(tab.id)
 
   return { cancelled: false }
 }

@@ -95,7 +95,7 @@ const plugin = Plugin.define({
     const options = ctx.options as Record<string, unknown>;
     const portStart = Number.isInteger(options.portStart) ? Number(options.portStart) : DEFAULT_PORT_START;
     const portEnd = Number.isInteger(options.portEnd) ? Number(options.portEnd) : DEFAULT_PORT_END;
-    const resume = options.resume === false ? false : undefined;
+    const resume = options.resume === true;
     const eventRetryMs = Number.isInteger(options.eventRetryMs) && Number(options.eventRetryMs) >= 0
       ? Number(options.eventRetryMs)
       : 1_000;
@@ -276,14 +276,15 @@ const plugin = Plugin.define({
               sessionID: body.sessionId,
               text: annotationPrompt({ ...body.annotation, tabId: Number(body.tabId) }),
               files,
-              delivery: "steer",
-              ...(resume === false ? { resume: false } : {}),
+              delivery: resume ? "steer" : "queue",
+              resume,
               metadata: { source: "chrome-annotation" },
             });
             lastAnnotation = {
               ok: true,
               sessionId: body.sessionId,
               transport: "session.prompt",
+              queued: !resume,
               messageId: result.id,
               messageType: result.type,
               time: new Date().toISOString(),
@@ -297,7 +298,7 @@ const plugin = Plugin.define({
             };
             throw error;
           }
-          sendJson(res, 200, { ok: true, sessionId: body.sessionId }, origin);
+          sendJson(res, 200, { ok: true, sessionId: body.sessionId, queued: !resume }, origin);
           return;
         }
         if (req.method === "POST" && url.pathname === "/unclaim") {

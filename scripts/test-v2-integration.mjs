@@ -82,6 +82,8 @@ try {
 
   const apiPort = await freePort()
   const bridgePort = await freePort()
+  const xdgConfigHome = join(temp, "xdg")
+  mkdirSync(xdgConfigHome, { recursive: true })
   const pluginPath = join(install, "node_modules", "opencode-chrome-annotation", "dist", "plugin.js")
   writeFileSync(join(project, "opencode.jsonc"), JSON.stringify({
     plugins: [{
@@ -97,7 +99,7 @@ try {
 
   server = spawn("opencode2", ["serve", "--hostname", "127.0.0.1", "--port", String(apiPort)], {
     cwd: project,
-    env: { ...process.env, OPENCODE_SERVER_PASSWORD: password },
+    env: { ...process.env, XDG_CONFIG_HOME: xdgConfigHome, OPENCODE_SERVER_PASSWORD: password },
     stdio: ["ignore", "pipe", "pipe"],
   })
   server.stdout.on("data", (chunk) => { stdout += chunk })
@@ -165,11 +167,34 @@ try {
   }).then(async (response) => ({ status: response.status, body: await response.json() }))
   assert(annotationResponse.status === 200 && annotationResponse.body.ok === true, "Annotation was not admitted")
 
+  const secondAnnotation = await fetch(`${bridgeUrl}/annotation`, {
+    method: "POST",
+    headers: extensionHeaders,
+    body: JSON.stringify({
+      tabId: 17,
+      sessionId,
+      extensionVersion: "integration",
+      annotation: {
+        comment: "Second queued annotation",
+        page: { title: "Integration page", url: "http://localhost/test" },
+        element: { selector: "main > p", tag: "p", text: "World", rect: {} },
+        viewport: { width: 1280, height: 720, devicePixelRatio: 2 },
+        screenshot: { mime: "image/png", dataUrl: screenshot },
+      },
+    }),
+  }).then(async (response) => ({ status: response.status, body: await response.json() }))
+  assert(secondAnnotation.status === 200 && secondAnnotation.body.ok === true, "Second annotation was not admitted")
+
   const status = await fetch(`${bridgeUrl}/status`).then((response) => response.json())
   const inbox = await api(baseUrl, `/api/session/${sessionId}/inbox`)
   const admittedFile = inbox.data?.find((item) => item.id === status.lastAnnotation?.messageId)?.payload?.files?.[0]
+  const active = await api(baseUrl, "/api/session/active")
   assert(status.lastAnnotation?.ok === true, "Bridge did not record successful admission")
+  assert(status.lastAnnotation?.queued === true, "Bridge did not mark the annotation as queued")
   assert(status.lastAnnotation?.response === undefined, "Bridge status retained the admitted prompt payload")
+  assert(inbox.data?.length === 2, "Both queued annotations were not retained in the session inbox")
+  assert(inbox.data?.every((item) => item.delivery === "queue"), "Annotations were not admitted in queue order")
+  assert(!active.data?.[sessionId], "Queued annotations started the agent before a chat command")
   assert(admittedFile?.mime === "image/png", "Admitted prompt did not materialize a PNG attachment")
   assert(admittedFile?.source?.type === "inline", "Admitted PNG was not an inline attachment")
 

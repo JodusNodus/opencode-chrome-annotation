@@ -251,7 +251,7 @@ describe("OpenCode V2 plugin", () => {
     expect(status.opencodeSessionId).toBe("ses_existing");
   });
 
-  test("claims a tab and submits the screenshot as a V2 image attachment", async () => {
+  test("queues the screenshot without starting code changes", async () => {
     const port = await freePort();
     const { context, events, prompts } = createContext(port);
     const cleanup = await plugin.setup(context as never);
@@ -284,12 +284,13 @@ describe("OpenCode V2 plugin", () => {
       screenshot: { mime: "image/png", dataUrl: screenshot },
     };
     expect((await post(port, "/annotation", { tabId: 7, sessionId: "ses_target", annotation })).body)
-      .toEqual({ ok: true, sessionId: "ses_target" });
+      .toEqual({ ok: true, sessionId: "ses_target", queued: true });
 
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toEqual(expect.objectContaining({
       sessionID: "ses_target",
-      delivery: "steer",
+      delivery: "queue",
+      resume: false,
       files: [{
         uri: screenshot,
         name: "browser-annotation.png",
@@ -331,7 +332,7 @@ describe("OpenCode V2 plugin", () => {
 
     const result = await postChunks(port, "/annotation", [payload.subarray(0, split), payload.subarray(split)]);
 
-    expect(result).toEqual({ status: 200, body: { ok: true, sessionId: "ses_unicode" } });
+    expect(result).toEqual({ status: 200, body: { ok: true, sessionId: "ses_unicode", queued: true } });
     expect(prompts[0].text).toContain("Move the café 🚀 heading");
   });
 

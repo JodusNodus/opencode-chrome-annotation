@@ -29,7 +29,9 @@ https://chromewebstore.google.com/detail/abeihanpaeioklkhioiigklonbomhjfd
 2. Click the extension button in Chrome.
 3. Connect the current tab to your OpenCode session from the in-page picker.
 4. Click **Annotate** in the in-page pill.
-5. Select an element, write your instruction, and submit.
+5. Select an element, write your instruction, and submit. The annotation is queued without changing code.
+6. Repeat for every change you want to describe.
+7. In the connected OpenCode chat, type a command such as `Apply all queued annotations` to start the code changes.
 
 
 ### What Gets Sent

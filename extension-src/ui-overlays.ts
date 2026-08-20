@@ -173,3 +173,33 @@ export async function showAnnotationError(tabId: number, message: string): Promi
     },
   })
 }
+
+export async function showAnnotationQueued(tabId: number): Promise<void> {
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "ISOLATED",
+    func: () => {
+      document.getElementById("__opc_annotation_queued")?.remove()
+
+      const panel = document.createElement("div")
+      panel.id = "__opc_annotation_queued"
+      panel.textContent = "Annotation queued. Add more, then type ‘Apply all queued annotations’ in OpenCode."
+      panel.style.cssText = [
+        "position:fixed",
+        "right:16px",
+        "bottom:16px",
+        "z-index:2147483647",
+        "max-width:380px",
+        "padding:12px 14px",
+        "border-radius:10px",
+        "background:#064e3b",
+        "color:#d1fae5",
+        "border:1px solid rgba(167,243,208,0.45)",
+        "box-shadow:0 10px 30px rgba(0,0,0,0.35)",
+        "font:13px/1.4 ui-sans-serif,system-ui,sans-serif",
+      ].join(";")
+      document.documentElement.appendChild(panel)
+      setTimeout(() => panel.remove(), 7000)
+    },
+  })
+}
