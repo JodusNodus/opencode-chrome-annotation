@@ -10,12 +10,12 @@ https://github.com/user-attachments/assets/bdee8a15-6720-4e57-b28d-ee6440722b71
 
 ## Install
 
-Add the plugin to your OpenCode config:
+Add the plugin to your OpenCode V2 config:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["opencode-chrome-annotation@latest"]
+  "plugins": ["opencode-chrome-annotation@latest"]
 }
 ```
 
@@ -25,11 +25,17 @@ https://chromewebstore.google.com/detail/abeihanpaeioklkhioiigklonbomhjfd
 
 ## How It Works
 
-1. Start OpenCode in your project.
+1. Start OpenCode V2 in your project.
 2. Click the extension button in Chrome.
 3. Connect the current tab to your OpenCode session from the in-page picker.
 4. Click **Annotate** in the in-page pill.
-5. Select an element, write your instruction, and submit.
+5. Select an element, write your instruction, and submit. The annotation is queued without changing code.
+6. Repeat for every change you want to describe.
+7. In the connected OpenCode chat, type a command such as `Apply all queued annotations` to start the code changes.
+
+Queued annotations appear interactively above the OpenCode chat composer with
+their instruction and selected target. Run `/apply-annotations` from that chat
+to process the complete queue as one change.
 
 
 ### What Gets Sent
@@ -37,15 +43,29 @@ https://chromewebstore.google.com/detail/abeihanpaeioklkhioiigklonbomhjfd
 - Your written instruction.
 - The current page URL and title.
 - Selected element metadata such as selector, tag, text, role, aria label, and bounds.
-- A screenshot saved locally by the plugin and referenced in the OpenCode prompt.
+- The visible-tab screenshot as a native OpenCode image attachment.
 
 
 ### Troubleshooting
 The plugin runs a local HTTP server bound to `127.0.0.1` on ports `39240-39260`. The extension discovers the active OpenCode plugin instance over localhost.
 
 - The extension can't start a new session, you need to be in an active OpenCode session to connect.
+- OpenCode V2 does not expose persisted session listing to plugins. The picker shows real sessions observed after plugin activation, including a session selected in the TUI; restart OpenCode after installing the plugin so the current session is observed.
+- The published Chrome Web Store extension is allowed by default. For an unpacked development extension, copy its ID from `chrome://extensions` and add its origin through plugin options:
+
+```json
+{
+  "plugins": [{
+    "package": "opencode-chrome-annotation@latest",
+    "options": {
+      "allowedExtensionOrigins": ["chrome-extension://your-unpacked-extension-id"]
+    }
+  }]
+}
+```
+
 - If the extension can't find any session, ask your agent to run `chrome_status` that should give a detailed report.
-- Make sure OpenCode and your Chromium browser exist in the same localhost network (not in seperate containers).
+- Make sure OpenCode and your Chromium browser exist in the same localhost network (not in separate containers).
 
 
 ## Development
@@ -65,6 +85,18 @@ Build the plugin:
 ```bash
 bun run build
 ```
+
+Run the unit and packed-plugin V2 integration tests:
+
+```bash
+bun test
+bun run test:integration:v2
+```
+
+The integration test requires the `opencode2` beta CLI. It installs the packed
+artifact into an isolated temporary project, starts a private V2 server, and
+verifies session events, inline PNG admission, and listener cleanup without
+calling a model.
 
 ### Extension
 

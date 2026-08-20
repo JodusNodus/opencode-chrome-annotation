@@ -6,15 +6,18 @@
   "main": "./dist/plugin.js",
   "exports": {
     ".": "./dist/plugin.js",
-    "./plugin": "./dist/plugin.js"
+    "./plugin": "./dist/plugin.js",
+    "./tui": "./dist/tui.js"
   },
   "files": [
     "dist",
     "README.md"
   ],
   "scripts": {
-    "build": "bun build src/plugin.ts --target=node --outfile=dist/plugin.js",
+    "build": "bun build src/plugin.ts src/tui.tsx --target=node --external @opencode-ai/plugin --external @opencode-ai/plugin/tui --external @opentui/core --external @opentui/solid --external solid-js --outdir=dist --entry-naming='[name].js'",
     "build:extension": "node scripts/build-extension.mjs",
+    "test": "bun test",
+    "test:integration:v2": "node scripts/test-v2-integration.mjs",
     "typecheck": "tsc --noEmit",
     "check:extension": "npm run build:extension && node --check extension/background.js && node --check extension/injected/dom.js && node -e \"JSON.parse(require('fs').readFileSync('extension/manifest.json','utf8'))\"",
     "dev": "bun run build",
@@ -42,12 +45,17 @@
     "url": "https://github.com/jodusnodus/opencode-chrome-annotation/issues"
   },
   "homepage": "https://github.com/jodusnodus/opencode-chrome-annotation#readme",
-  "peerDependencies": {
-    "@opencode-ai/plugin": "*"
+  "overrides": {
+    "@babel/core": "7.29.7"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "0.0.0-beta-17639",
+    "@opentui/core": "0.5.4",
+    "solid-js": "1.9.12"
   },
   "devDependencies": {
+    "@opentui/solid": "0.5.4",
     "@types/chrome": "*",
-    "@opencode-ai/plugin": "*",
     "bun-types": "*",
     "typescript": "*"
   }

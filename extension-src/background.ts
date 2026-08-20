@@ -1,7 +1,7 @@
 import { logExtension, warnExtension } from "./logger.js"
 import { getActiveTab } from "./tabs.js"
 import { postJson, requestSessionState } from "./server-api.js"
-import { injectConnectionOverlay, removeConnectionOverlay, showAnnotationError } from "./ui-overlays.js"
+import { injectConnectionOverlay, removeConnectionOverlay, showAnnotationError, showAnnotationQueued } from "./ui-overlays.js"
 import { showSessionPicker } from "./session-picker.js"
 import { runAnnotationPicker } from "./annotation-picker.js"
 import { createConnectionMonitor } from "./connection-monitor.js"
@@ -56,7 +56,10 @@ async function ensureSiteAccess(tab: chrome.tabs.Tab): Promise<void> {
     throw new Error("This page cannot be annotated. Open an http(s) page and try again.")
   }
 
-  const granted = await chrome.permissions.request({ origins: [origin] })
+  // captureVisibleTab requires activeTab or <all_urls>. The activeTab grant from
+  // clicking the toolbar is revoked on navigation while the connection overlay
+  // intentionally remains active for same-origin navigation.
+  const granted = await chrome.permissions.request({ origins: ["<all_urls>"] })
   if (!granted) {
     throw new Error("Site access was denied for this page.")
   }
@@ -182,7 +185,12 @@ async function startAnnotationMode(tabOverride?: chrome.tabs.Tab): Promise<{ can
   if (!picked || picked.cancelled === true) return { cancelled: true }
 
   logExtension("Capturing annotation screenshot", { tabId: tab.id, windowId: tab.windowId })
-  const screenshot = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" })
+  const screenshot = await Promise.race([
+    chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" }),
+    new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error("Screenshot capture timed out. Reconnect the tab and allow site access.")), 10_000)
+    }),
+  ])
   logExtension("Captured annotation screenshot", {
     tabId: tab.id,
     bytesApprox: Math.round((screenshot.length * 3) / 4),
@@ -223,6 +231,7 @@ async function startAnnotationMode(tabOverride?: chrome.tabs.Tab): Promise<{ can
     tabId: tab.id,
     sessionId: annotationResponse?.sessionId,
   })
+  if (annotationResponse?.queued === true) await showAnnotationQueued(tab.id)
 
   return { cancelled: false }
 }

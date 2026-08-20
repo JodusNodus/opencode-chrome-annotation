@@ -25,6 +25,10 @@ bun install
 
 # Validate scripts
 node --check extension/background.js
+
+# Test the plugin
+bun test
+bun run test:integration:v2
 ```
 
 ## Testing Changes
