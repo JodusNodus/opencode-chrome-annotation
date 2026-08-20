@@ -62,10 +62,18 @@ function Controller(props: { context: Plugin.Context }) {
         description: "Start one agent turn using every queued browser annotation",
         group: "Session",
         palette: true,
-        slash: { name: "apply-annotations" },
-        enabled: Boolean(sessionID && annotations(props.context, sessionID).length),
+        slash: { name: "apply-annotations", aliases: ["apply-annotation"] },
+        enabled: Boolean(sessionID),
         run: async () => {
           if (!sessionID) return;
+          if (!annotations(props.context, sessionID).length) {
+            props.context.ui.toast.show({
+              title: "Browser annotations",
+              message: "No queued browser annotations to apply.",
+              variant: "info",
+            });
+            return;
+          }
           await props.context.client.session.prompt({
             sessionID,
             text: "Apply all queued browser annotations now as one coherent change.",
