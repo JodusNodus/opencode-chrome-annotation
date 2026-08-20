@@ -33,6 +33,10 @@ https://chromewebstore.google.com/detail/abeihanpaeioklkhioiigklonbomhjfd
 6. Repeat for every change you want to describe.
 7. In the connected OpenCode chat, type a command such as `Apply all queued annotations` to start the code changes.
 
+Queued annotations appear interactively above the OpenCode chat composer with
+their instruction and selected target. Run `/apply-annotations` from that chat
+to process the complete queue as one change.
+
 
 ### What Gets Sent
 

@@ -91,6 +91,7 @@ function annotationPrompt(annotation: any): string {
 
 const plugin = Plugin.define({
   id: "opencode.chrome-annotation",
+  tui: true,
   setup: async (ctx) => {
     const options = ctx.options as Record<string, unknown>;
     const portStart = Number.isInteger(options.portStart) ? Number(options.portStart) : DEFAULT_PORT_START;
