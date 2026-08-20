@@ -54,34 +54,46 @@ function Controller(props: { context: Plugin.Context }) {
   props.context.keymap.layer(() => {
     const route = props.context.ui.router.current();
     const sessionID = route.type === "session" ? route.sessionID : undefined;
+    const apply = async () => {
+      if (!sessionID) return;
+      if (!annotations(props.context, sessionID).length) {
+        props.context.ui.toast.show({
+          title: "Browser annotations",
+          message: "No queued browser annotations to apply.",
+          variant: "info",
+        });
+        return;
+      }
+      await props.context.client.session.prompt({
+        sessionID,
+        text: "Apply all queued browser annotations now as one coherent change.",
+        delivery: "steer",
+        resume: true,
+      });
+    };
     return {
       mode: "global",
-      commands: [{
-        id: "chrome-annotation.apply",
-        title: "Apply queued browser annotations",
-        description: "Start one agent turn using every queued browser annotation",
-        group: "Session",
-        palette: true,
-        slash: { name: "apply-annotations", aliases: ["apply-annotation"] },
-        enabled: Boolean(sessionID),
-        run: async () => {
-          if (!sessionID) return;
-          if (!annotations(props.context, sessionID).length) {
-            props.context.ui.toast.show({
-              title: "Browser annotations",
-              message: "No queued browser annotations to apply.",
-              variant: "info",
-            });
-            return;
-          }
-          await props.context.client.session.prompt({
-            sessionID,
-            text: "Apply all queued browser annotations now as one coherent change.",
-            delivery: "steer",
-            resume: true,
-          });
+      commands: [
+        {
+          id: "chrome-annotation.apply",
+          title: "Apply queued browser annotations",
+          description: "Start one agent turn using every queued browser annotation",
+          group: "Session",
+          palette: true,
+          slash: { name: "apply-annotations" },
+          enabled: Boolean(sessionID),
+          run: apply,
         },
-      }],
+        {
+          id: "chrome-annotation.apply-singular",
+          title: "Apply queued browser annotations",
+          description: "Alias for /apply-annotations",
+          group: "Session",
+          slash: { name: "apply-annotation" },
+          enabled: Boolean(sessionID),
+          run: apply,
+        },
+      ],
     };
   });
   return <></>;
